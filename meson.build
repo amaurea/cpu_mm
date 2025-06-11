@@ -9,13 +9,6 @@ py = import('python').find_installation(pure: false)
 pybind11 = dependency('pybind11')
 omp      = dependency('openmp')
 
-py.extension_module('example',
-	'src/example.cpp',
-	install: true,
-	dependencies : [pybind11],
-	subdir: 'example',
-)
-
 py.extension_module('compiled',
 	'src/maps.cpp',
 	install: true,

@@ -1,14 +1,15 @@
 from . import compiled
+import numpy as np
 
 ncomp = 3
 tsize = 64
 
-class LocalPixelization(device.LocalPixelization):
+class LocalPixelization(compiled.LocalPixelization):
 	def __init__(self, nypix_global, nxpix_global, periodic_xcoord=True, tsize=tsize):
 		nycells = (nypix_global+tsize-1)//tsize
 		nxcells = (nxpix_global+tsize-1)//tsize
 		cell_offsets = np.full((nycells,nxcells),-1,dtype=np.int32)
-		compiled.LocalPixelization.__init__(nypix_global, nxpix_global, 0, cell_offsets)
+		compiled.LocalPixelization.__init__(self, nypix_global, nxpix_global, cell_offsets)
 
 class LocalMap:
 	def __init__(self, pixelization, arr):
@@ -32,7 +33,7 @@ class DynamicMap(LocalMap):
 		# Initial empty pixelization
 		self.pixelization = LocalPixelization(nypix_global, nxpix_global, periodic_xcoord=periodic_xcoord)
 		# Data
-		self.arr = np.zeros((self.pixelization.nactive,ncomp,tsize,tsize),dtype=dtype)
+		self.arr = np.zeros((0,ncomp,tsize,tsize),dtype=dtype)
 	def finalize(self):
 		return LocalMap(self.pixelization, self.arr)
 
@@ -47,20 +48,27 @@ class PointingPrePlan:
 
 # For now, there's no difference between a plan and preplan,
 # but we still do it this way for compatibility
-class PointingPlan:
-	def __init__(self, preplan, xpointing): return preplan.plan
+def PointingPlan(preplan, xpointing): return preplan.plan
 
 def tod2map(lmap, tod, xpointing, plan, response=None):
 	if response is None:
 		response = np.full((2,len(tod)),1,tod.dtype)
-	if isinstance(lmap, Dynamicmap):
+	if isinstance(lmap, DynamicMap):
 		expand_map_if_necessary(lmap, plan)
-	compiled.tod2map(lmap.arr, tod, xpointing, response, lmap.pixelization, plan)
+	fun = cget("tod2map", tod.dtype)
+	fun(lmap.arr, tod, xpointing, response, lmap.pixelization, plan)
 
-def map2tod(tod, lmap, xpointing, response=None):
+def map2tod(tod, lmap, xpointing, plan=None, response=None):
 	if response is None:
 		response = np.full((2,len(tod)),1,tod.dtype)
-	compiled.map2tod(lmap.arr, tod, xpointing, response, lmap.pixelization)
+	fun = cget("map2tod", tod.dtype)
+	fun(lmap.arr, tod, xpointing, response, lmap.pixelization)
+
+def cget(name, dtype):
+	if   dtype == np.float32: suffix = "_f32"
+	elif dtype == np.float64: suffix = "_f64"
+	else: raise ValueError("Invalid dtype '%s'" % str(dtype))
+	return getattr(compiled, name + suffix)
 
 def expand_map_if_necessary(lmap, plan):
 	"""Expand lmap's tiles to cover any previously unseen
@@ -80,3 +88,5 @@ def expand_map_if_necessary(lmap, plan):
 	oarr[:len(lmap.arr)] = lmap.arr
 	# Assign new cell offsets
 	cflat[new] = np.arange(len(lmap.arr), ncell)
+	# And finally replace the array
+	lmap.arr   = oarr

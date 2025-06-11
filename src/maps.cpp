@@ -15,7 +15,7 @@ template<typename T> using carray_cast = pb::array_t<T,pb::array::c_style | pb::
 template<typename T> T clip(T a, int aend) {
 	return a < 0 ? 0 : a < aend ? a : aend-1;
 }
-template<typename T> int wclip(T a, int aperiod) {
+template<typename T> T wclip(T a, int aperiod) {
 	if(a  < 0)       a += aperiod;
 	if(a >= aperiod) a -= aperiod;
 	return clip(a, aperiod);
@@ -23,37 +23,51 @@ template<typename T> int wclip(T a, int aperiod) {
 template<typename T> struct Pixloc {
 	Pixloc(T val, int n, bool wrap = false) {
 		v     = wrap ? wclip(val, n) : clip(val, n);
-		i0    = int(v);
-		icell = i0>>6;
-		i0   &= 0b111111;
-		i1    = i0+1;
-		d     = val-i0;
-		if(wrap && i1 >= n) i1 = 0;
+		i[0]  = int(v);
+		d[1]  = v-i[0];
+		d[0]  = 1-d[1];
+		i[1]  = i[0]+1;
+		if(wrap && i[1] >= n) i[1] = 0;
+		// Get the tile
+		icell[0] = i[0]>>6;
+		icell[1] = i[1]>>6;
+		// Make the pixel tile-relative
+		i[0] &= 0b111111;
+		i[1] &= 0b111111;
 	}
-	int i0, i1, icell;
-	T v, d;
+	int i[2], icell[2];
+	T v, d[2];
 };
 
-template<typename T> void add_tqu(T * map, int64_t polstride, int icell, int iy, int ix, T t, T q, T u, T weight) {
-	bool in_cell = ((iy|ix)&0b111111111111) == 0;
+#include <stdio.h>
+void moo(const carray<float> & arr) {
+	float a = 0;
+	const float* ptr = arr.data();
+	for(int i = 0; i < arr.size(); i++)
+		a += ptr[i]*ptr[i];
+	a /= arr.size();
+	a = sqrt(a);
+	fprintf(stderr, "moomoo %15.7e\n", a);
+}
+
+template<typename T> void add_tqu(T * cell_data, int64_t polstride, int iy, int ix, T t, T q, T u, T weight) {
+	bool in_cell = iy >= 0 && iy < 64 && ix >= 0 && ix < 64;
 	if(in_cell) {
-		map  += icell<<12;  // Offset to our cell
 		int s = (iy<<6) | ix; // index in cell
-		map[s+0*polstride] += t*weight;
-		map[s+1*polstride] += q*weight;
-		map[s+2*polstride] += u*weight;
+		cell_data[s+0*polstride] += t*weight;
+		cell_data[s+1*polstride] += q*weight;
+		cell_data[s+2*polstride] += u*weight;
 	}
 }
 
-template<typename T> T eval_tqu(const T * map, int64_t polstride, int icell, int iy, int ix, T tr, T qr, T ur, T weight) {
+template<typename T> T eval_tqu(const T * cell_data, int64_t polstride, int iy, int ix, T tr, T qr, T ur, T weight) {
 	T val = 0;
-	bool in_cell = ((iy|ix)&0b111111111111) == 0;
+	bool in_cell = iy >= 0 && iy < 64 && ix >= 0 && ix < 64;
 	if(in_cell) {
-		map  += icell<<12;  // Offset to our cell
 		int s = (iy<<6) | ix; // index in cell
-		val += map[s+0*polstride]*tr*weight;
-		val += map[s+1*polstride]*qr*weight;
-		val += map[s+2*polstride]*ur*weight;
+		val += cell_data[s+0*polstride]*tr*weight;
+		val += cell_data[s+1*polstride]*qr*weight;
+		val += cell_data[s+2*polstride]*ur*weight;
 	}
 	return val;
 }
@@ -67,43 +81,68 @@ struct LocalPixelization {
 };
 
 struct PointingRange {
-	int64_t fsamp0;
+	int64_t samp0;
 	int32_t nsamp;
 	int32_t det;
 };
 
 struct PointingCell {
+	int ycell, xcell;
 	std::vector<PointingRange> ranges;
 };
 
 // This is mainly a c++ structure. It will be opaque on the python side
 struct PointingPlan {
-	PointingPlan(int64_t nsamp, int maxcells):nsamp(nsamp),cells(maxcells) {}
+	PointingPlan(int64_t nsamp, int nycell, int nxcell):nycell(nycell),nxcell(nxcell),cells(nycell*nxcell) {
+		init_cells();
+	}
 	template<typename T>
 	PointingPlan(const carray<T> &xpointing, LocalPixelization &lp):cells(lp.cell_offsets.size()) {
-		nsamp = xpointing.shape(2);
+		nycell = lp.cell_offsets.shape(0);
+		nxcell = lp.cell_offsets.shape(1);
+		init_cells();
 		build_pointing_plan(xpointing, lp, *this);
-		finish();
 	}
-	void add_range(int global_cell, int det, int64_t samp0, int rangelen) {
-		PointingRange r = { det*nsamp+samp0, rangelen, det };
-		cells[global_cell].ranges.push_back(r);
+	void init_cells() {
+		// Handy to have the yx coordinates of each cell.
+		// Could calculate it on-the-fly too though
+		for(int ycell = 0; ycell < nycell; ycell++)
+		for(int xcell = 0; xcell < nxcell; xcell++) {
+			int icell = ycell*nxcell+xcell;
+			cells[icell].ycell = ycell;
+			cells[icell].xcell = xcell;
+			cells[icell].ranges.clear();
+		}
 	}
-	void finish() {
-		for(size_t i = 0; i < cells.size(); i++) {
-			if(!cells[i].ranges.empty())
-				active.push_back(i);
+	void add_point(int global_cell, int det, int64_t samp) {
+		auto & rs = cells[global_cell].ranges;
+		if(rs.empty()) {
+			rs.push_back(PointingRange{samp,1,det});
+			active.push_back(global_cell);
+		}
+		else {
+			PointingRange & r = rs[rs.size()-1];
+			// Already handled
+			if(r.det == det && samp < r.samp0 + r.nsamp)
+				return;
+			// Extend current range
+			else if(r.det == det && samp == r.samp0 + r.nsamp)
+				r.nsamp++;
+			// New range
+			else
+				rs.push_back(PointingRange{samp,1,det});
 		}
 	}
 	const carray<int> get_active() {
 		return pb::array_t<int>(active.size(), &active[0]);
 	}
-	int64_t nsamp;
+	int nycell, nxcell;
 	std::vector<PointingCell> cells;
 	std::vector<int> active;
 };
 
-// Building a pointing plan.
+// Building a pointing plan. For each cell, we need all
+// the samples that touch that cell in some way.
 template<typename T>
 void build_pointing_plan(
 	const carray<T> &xpointing,
@@ -112,29 +151,20 @@ void build_pointing_plan(
 
 	int     ndet  = xpointing.shape(1);
 	int64_t nsamp = xpointing.shape(2);
-	auto _pt      = xpointing.template unchecked<3>();
-	auto _active  = lp.cell_offsets.mutable_unchecked<2>();
+	auto    _pt   = xpointing.template unchecked<3>();
+	int     nxcell= plan.nxcell;
 
 	for(int det = 0; det < ndet; det++) {
-		int gprev = -1;
-		int64_t psamp = 0;
 		for(int64_t samp = 0; samp < nsamp; samp++) {
 			// Cell lookup and wrapping
 			T y = _pt(0,det,samp);
 			T x = _pt(1,det,samp);
 			Pixloc<T> py(y, lp.nypix_global);
 			Pixloc<T> px(x, lp.nxpix_global, true);
-			// global offset of this cell
-			int gcell = py.icell*_active.shape(1)+px.icell;
-			// Is this the end of a range?
-			if(gcell != gprev) {
-				if(gprev >= 0) plan.add_range(gprev, det, psamp, samp);
-				gprev = gcell;
-				psamp = samp;
-			}
+			for(int jy = 0; jy < 2; jy++)
+			for(int jx = 0; jx < 2; jx++)
+				plan.add_point(py.icell[jy]*nxcell+px.icell[jx], det, samp);
 		}
-		// Close any remaining range
-		if(gprev >= 0) plan.add_range(gprev, det, psamp, nsamp);
 	}
 }
 
@@ -149,28 +179,27 @@ void tod2map(
 
 	// Like gpu_mm, we're assuming a contiguous block of memory.
 	// This should be ensured by the carray type
-	T * _map = map.mutable_data();
+	auto _map = map.template mutable_unchecked();
 	auto _tod = tod.template unchecked<2>();
 	auto _pt  = xpointing.template unchecked<3>();
 	auto _resp= response.template unchecked<2>();
 	auto _coffs = lp.cell_offsets.unchecked<2>();
 	int64_t polstride = map.shape(2)*map.shape(3);
 
-	// FIXME: We must distingush between two icells here:
-	// 1. The index of the active cells for this plan
-	// 2. The index into the total set of active cells for the map
-	// These are currently confused
-	#pragma omp parallel for
+	T tmp = 0;
+	//#pragma omp parallel for
 	for(size_t ai = 0; ai < plan.active.size(); ai++) {
 		int gcell = plan.active[ai];
 		const auto & cell = plan.cells[gcell];
+		int icell = _coffs(cell.ycell, cell.xcell);
+		T * cell_data = _map.mutable_data(icell,0,0,0);
 		for(const auto & range : cell.ranges) {
-			for(int64_t si = 0; si < range.nsamp; si++) {
-				int64_t fsamp = range.fsamp0 + si;
-				T val    = _tod(0,fsamp);
-				T y      = _pt(0,0,fsamp);
-				T x      = _pt(1,0,fsamp);
-				T alpha  = _pt(2,0,fsamp);
+			for(int si = 0; si < range.nsamp; si++) {
+				int64_t samp = range.samp0 + si;
+				T val    = _tod(range.det,samp);
+				T y      = _pt(0,range.det,samp);
+				T x      = _pt(1,range.det,samp);
+				T alpha  = _pt(2,range.det,samp);
 				T t_resp = _resp(0,range.det);
 				T p_resp = _resp(1,range.det);
 				// Calculate the response
@@ -180,16 +209,23 @@ void tod2map(
 				// Cell lookup and wrapping
 				Pixloc<T> py(y, lp.nypix_global);
 				Pixloc<T> px(x, lp.nxpix_global, true);
-				// Loop through our four pixels
-				int icell = _coffs(py.icell, px.icell);
-				if(icell < 0) continue; // raise error here?
-				add_tqu(_map, polstride, icell, py.i0, px.i0, t, q, u, (1-py.d)*(1-px.d));
-				add_tqu(_map, polstride, icell, py.i0, px.i1, t, q, u, (1-py.d)*px.d);
-				add_tqu(_map, polstride, icell, py.i1, px.i0, t, q, u, py.d*(1-px.d));
-				add_tqu(_map, polstride, icell, py.i1, px.i1, t, q, u, py.d*px.d);
+
+				fprintf(stderr, "A %2d %4d %5d %3d %3d %8.1e %8.1e %8.1e %8.5f %8.5f %8.5f %8.5f\n", ai, range.det, samp, py.i[0], px.i[0], t, q, u, py.d[1], px.d[1], y, x);
+				bool in_cell = py.i[0] >= 0 && py.i[0] < 64 && px.i[0] >= 0 && px.i[0] < 64;
+				if(in_cell) tmp += *map.data(icell,0,py.i[0],px.i[0]);
+				fprintf(stderr, "B %2d %4d %5d %3d %3d\n", ai, range.det, samp, py.i[1], px.i[1]);
+				in_cell = py.i[1] >= 0 && py.i[1] < 64 && px.i[1] >= 0 && px.i[1] < 64;
+				if(in_cell) tmp += *map.data(icell,0,py.i[1],px.i[1]);
+
+				for(int jy = 0; jy < 2; jy++)
+				for(int jx = 0; jx < 2; jx++)
+					// We should only process pixels that actually belong to this cell
+					if(py.icell[jy]==cell.ycell && px.icell[jx]==cell.xcell)
+						add_tqu(cell_data, polstride, py.i[jy], px.i[jx], t, q, u, py.d[jy]*px.d[jx]);
 			}
 		}
 	}
+	//fprintf(stderr, "printing this to avoid optimization: %15.7e\n", tmp);
 }
 
 // Can map2tod use the same data structure? Want to loop over the
@@ -210,7 +246,7 @@ void map2tod(
 
 	// Like gpu_mm, we're assuming a contiguous block of memory.
 	// This should be ensured by the carray type
-	const T * _map = map.data();
+	auto _map = map.template unchecked();
 	auto _tod = tod.template mutable_unchecked<2>();
 	auto _pt  = xpointing.template unchecked<3>();
 	auto _resp= response.template unchecked<2>();
@@ -237,13 +273,14 @@ void map2tod(
 			// Cell lookup and wrapping
 			Pixloc<T> py(y, lp.nypix_global);
 			Pixloc<T> px(x, lp.nxpix_global, true);
-			int icell = _coffs(py.icell, px.icell);
 			// Loop through our four pixels
 			T val = 0;
-			val += eval_tqu(_map, polstride, icell, py.i0, px.i0, tr, qr, ur, (1-py.d)*(1-px.d));
-			val += eval_tqu(_map, polstride, icell, py.i0, px.i1, tr, qr, ur, (1-py.d)*px.d);
-			val += eval_tqu(_map, polstride, icell, py.i1, px.i0, tr, qr, ur, py.d*(1-px.d));
-			val += eval_tqu(_map, polstride, icell, py.i1, px.i1, tr, qr, ur, py.d*px.d);
+			for(int jy = 0; jy < 2; jy++)
+			for(int jx = 0; jx < 2; jx++) {
+				int icell = _coffs(py.icell[jy], px.icell[jx]);
+				const T * cell_data = _map.data(icell,0,0,0);
+				val += eval_tqu(cell_data, polstride, py.i[jy], px.i[jx], tr, qr, ur, py.d[jy]*px.d[jx]);
+			}
 			_tod(0,fsamp) += val;
 		}
 	}
@@ -304,10 +341,9 @@ PYBIND11_MODULE(compiled, m) {
 
 	// Har to expose the others currently, since they use c++ vectors etc
 	pb::class_<PointingPlan>(m, "PointingPlan")
-		.def(pb::init<int64_t, int>())
+		.def(pb::init<int64_t, int, int>())
 		.def(pb::init<const carray<float>&, LocalPixelization &>())
 		.def(pb::init<const carray<double>&, LocalPixelization &>())
-		.def_readwrite("nsamp", &PointingPlan::nsamp)
 		.def_property_readonly("active", &PointingPlan::get_active);
 
 	// Float and double versions of these
