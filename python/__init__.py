@@ -1,15 +1,21 @@
 from . import compiled
 import numpy as np
 
-ncomp = 3
-tsize = 64
+ncomp  = 3
+tshape = (64,64)
 
 class LocalPixelization(compiled.LocalPixelization):
-	def __init__(self, nypix_global, nxpix_global, periodic_xcoord=True, tsize=tsize):
-		nycells = (nypix_global+tsize-1)//tsize
-		nxcells = (nxpix_global+tsize-1)//tsize
-		cell_offsets = np.full((nycells,nxcells),-1,dtype=np.int32)
-		compiled.LocalPixelization.__init__(self, nypix_global, nxpix_global, cell_offsets)
+	def __init__(self, nypix_global, nxpix_global, periodic_xcoord=True):
+		nycells   = (nypix_global+tshape[0]-1)//tshape[0]
+		nxcells   = (nxpix_global+tshape[1]-1)//tshape[1]
+		cell_inds = np.full((nycells,nxcells),-1,dtype=np.int32)
+		compiled.LocalPixelization.__init__(self, nypix_global, nxpix_global, cell_inds)
+		self.update_cell_offsets()
+	def update_cell_offsets(self):
+		"""After cell_inds has been changed, cell_offsets_cpu must be updated
+		to reflect those changes. Currently this must be done manually.
+		This all of this is clunky..."""
+		self.cell_offsets_cpu = self.cell_inds * (ncomp*tshape[0]*tshape[1])
 
 class LocalMap:
 	def __init__(self, pixelization, arr):
@@ -33,7 +39,7 @@ class DynamicMap(LocalMap):
 		# Initial empty pixelization
 		self.pixelization = LocalPixelization(nypix_global, nxpix_global, periodic_xcoord=periodic_xcoord)
 		# Data
-		self.arr = np.zeros((0,ncomp,tsize,tsize),dtype=dtype)
+		self.arr = np.zeros((0,ncomp,tshape[0],tshape[1]),dtype=dtype)
 	def finalize(self):
 		return LocalMap(self.pixelization, self.arr)
 
@@ -50,11 +56,18 @@ class PointingPrePlan:
 # but we still do it this way for compatibility
 def PointingPlan(preplan, xpointing): return preplan.plan
 
+
+# TODO: I've decided that tod should always be 2d,
+# map always 4d, when sogma uses them in the device
+# interface. This will require some changes with how
+# it's used with gpu_mm
+
 def tod2map(lmap, tod, xpointing, plan, response=None):
 	if response is None:
 		response = np.full((2,len(tod)),1,tod.dtype)
 	if isinstance(lmap, DynamicMap):
 		expand_map_if_necessary(lmap, plan)
+	if tod.ndim == 1: tod = tod.reshape(xpointing.shape[1],-1)
 	fun = cget("tod2map", tod.dtype)
 	fun(lmap.arr, tod, xpointing, response, lmap.pixelization, plan)
 
@@ -63,6 +76,23 @@ def map2tod(tod, lmap, xpointing, plan=None, response=None):
 		response = np.full((2,len(tod)),1,tod.dtype)
 	fun = cget("map2tod", tod.dtype)
 	fun(lmap.arr, tod, xpointing, response, lmap.pixelization)
+
+def clear_ranges(tod, dets, starts, lens):
+	fun = cget("clear_ranges", tod.dtype)
+	fun(tod, dets, starts, lens)
+
+def extract_ranges(tod, junk, offs, dets, starts, lens):
+	fun = cget("extract_ranges", tod.dtype)
+	fun(tod, junk.reshape(-1), offs, dets, starts, lens)
+
+def insert_ranges(tod, junk, offs, dets, starts, lens):
+	fun = cget("insert_ranges", tod.dtype)
+	fun(tod, junk.reshape(-1), offs, dets, starts, lens)
+
+def fix_shape(arr, shape):
+	assert arr.flags["C_CONTIGUOUS"]
+	if arr.ndim == 1: return arr.reshape(shape)
+	else: return arr
 
 def cget(name, dtype):
 	if   dtype == np.float32: suffix = "_f32"
@@ -78,7 +108,7 @@ def expand_map_if_necessary(lmap, plan):
 	# plan has its own set of new active cells
 	# Update lmap.pixelization and lmap.arr with any new cells
 	pactive = plan.active
-	cflat   = lmap.pixelization.cell_offsets.reshape(-1)
+	cflat   = lmap.pixelization.cell_inds.reshape(-1)
 	# global flat cell index of new cells
 	new     = pactive[cflat[pactive]<0]
 	if new.size == 0: return
@@ -90,3 +120,9 @@ def expand_map_if_necessary(lmap, plan):
 	cflat[new] = np.arange(len(lmap.arr), ncell)
 	# And finally replace the array
 	lmap.arr   = oarr
+	# Yuck. Manually update cell_offsets_cpu. This is needed because
+	# cpu_mm, sogma and gpu_mm don't agree on whether one should work
+	# with general offsets or simpler tile indices. Offsets are more general,
+	# but this generality isn't realized in practice because I assume
+	# [ntile,ncomp,64,64] several other places
+	lmap.pixelization.update_cell_offsets()
