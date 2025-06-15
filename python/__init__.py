@@ -62,18 +62,28 @@ def PointingPlan(preplan, xpointing): return preplan.plan
 # interface. This will require some changes with how
 # it's used with gpu_mm
 
+_dtype_msg = "tod, map, xpointing (and response) must have the same dtype, which must be float32 or float64"
+
 def tod2map(lmap, tod, xpointing, plan, response=None):
 	if response is None:
 		response = np.full((2,len(tod)),1,tod.dtype)
+	assert tod.dtype == lmap.arr.dtype, _dtype_msg
+	assert tod.dtype == xpointing.dtype, _dtype_msg
+	assert tod.dtype == response.dtype, _dtype_msg
+	assert tod.dtype in [np.float32, np.float64], _dtype_msg
 	if isinstance(lmap, DynamicMap):
 		expand_map_if_necessary(lmap, plan)
-	if tod.ndim == 1: tod = tod.reshape(xpointing.shape[1],-1)
+	#if tod.ndim == 1: tod = tod.reshape(xpointing.shape[1],-1)
 	fun = cget("tod2map", tod.dtype)
 	fun(lmap.arr, tod, xpointing, response, lmap.pixelization, plan)
 
 def map2tod(tod, lmap, xpointing, plan=None, response=None):
 	if response is None:
 		response = np.full((2,len(tod)),1,tod.dtype)
+	assert tod.dtype == lmap.arr.dtype, _dtype_msg
+	assert tod.dtype == xpointing.dtype, _dtype_msg
+	assert tod.dtype == response.dtype, _dtype_msg
+	assert tod.dtype in [np.float32, np.float64], _dtype_msg
 	fun = cget("map2tod", tod.dtype)
 	fun(lmap.arr, tod, xpointing, response, lmap.pixelization)
 

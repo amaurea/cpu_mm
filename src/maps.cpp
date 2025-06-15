@@ -179,7 +179,7 @@ void tod2map(
 	auto _cinds = lp.cell_inds.unchecked<2>();
 	int64_t polstride = map.shape(2)*map.shape(3);
 
-	//#pragma omp parallel for
+	#pragma omp parallel for
 	for(size_t ai = 0; ai < plan.active.size(); ai++) {
 		int32_t gcell = plan.active[ai];
 		const auto & cell = plan.cells[gcell];
@@ -264,7 +264,7 @@ void map2tod(
 				const T * cell_data = _map.data(icell,0,0,0);
 				val += eval_tqu(cell_data, polstride, py.i[jy], px.i[jx], tr, qr, ur, py.d[jy]*px.d[jx]);
 			}
-			_tod(det,samp) += val;
+			_tod(det,samp) = val;
 		}
 	}
 }
