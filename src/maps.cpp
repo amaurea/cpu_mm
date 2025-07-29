@@ -5,6 +5,8 @@
 #include <vector>
 namespace pb = pybind11;
 
+extern "C" void sgemm_(const char * transa, const char * transb, const int * M, const int * N, const int * K, const float * alpha, const float * A, const int * LDA, const float * B, const int * LDB, const float * beta, float * C, const int * LCD);
+
 // DynamicMap is python in gpu_mm, so can be that here too
 // LocalPixelization is hybrid in gpu_mm. Why? Maybe just so it can be sent as argument
 
@@ -316,6 +318,77 @@ void insert_ranges(carray<T> & tod, const carray<T> & data, const carray<int32_t
 	}
 }
 
+// Deglitching
+
+template<typename T>
+T arr_mean(const T * arr, int32_t n) {
+	T res = 0;
+	for(int32_t i = 0; i < n; i++) res += arr[i];
+	return res/n;
+}
+
+template<typename T>
+void get_border_means(carray<T> & bvals, const carray<T> & tod, const carray<int32_t> & index_map) {
+	// index_map[ncut,{det,start1,end1,start2,end2}]
+	auto _bvals = bvals.template mutable_unchecked<2>();
+	auto _tod   = tod.template unchecked<2>();
+	auto _imap  = index_map.template unchecked<2>();
+	int32_t nrange = index_map.shape(0);
+	// dynamic because the mean operation can take very variable time
+	#pragma omp parallel for schedule(dynamic)
+	for(int32_t ri = 0; ri < nrange; ri++) {
+		int32_t det = _imap(ri,0);
+		int32_t i11 = _imap(ri,1);
+		int32_t i12 = _imap(ri,2);
+		int32_t i21 = _imap(ri,3);
+		int32_t i22 = _imap(ri,4);
+		int32_t n1  = i12-i11;
+		int32_t n2  = i22-i21;
+		T v1 = 0, v2 = 0;
+		if(n1 > 0) v1 = arr_mean(&_tod(det,i11), n1);
+		if(n2 > 0) v2 = arr_mean(&_tod(det,i21), n2);
+		if(n1== 0) v1 = v2;
+		if(n2== 0) v2 = v1;
+		_bvals(ri,0) = v1;
+		_bvals(ri,1) = v2;
+	}
+}
+
+template<typename T>
+void deglitch(carray<T> & tod, const carray<T> & bvals, const carray<T> & cumj, const carray<int32_t> index_map2) {
+	auto _tod   = tod.template mutable_unchecked<2>();
+	auto _bvals = bvals.template unchecked<2>();
+	auto _cumj  = cumj.template unchecked<1>();
+	auto _imap  = index_map2.template unchecked<2>();
+	int32_t nsamp = tod.shape(1);
+	int32_t nrange= bvals.shape(0);
+	// dynamic because the tod loops have variable length
+	#pragma omp parallel for schedule(dynamic)
+	for(int32_t ri = 0; ri < nrange; ri++) {
+		int32_t det = _imap(ri,0);
+		int32_t r0  = _imap(ri,1);
+		int32_t i1  = _imap(ri,2);
+		int32_t i2  = _imap(ri,3);
+		int32_t i3  = (ri < nrange-1 && _imap(ri+1,0) == det) ? _imap(ri+1,2) : nsamp;
+		T dcumj     = _cumj(ri);
+		if(r0 > 0) dcumj -= _cumj(r0-1);
+		// Gapfill cut area
+		for(int32_t i = i1; i < i2; i++)
+			_tod(det,i) = _bvals(ri,1)-dcumj;
+		// Offset postcut area
+		for(int32_t i = i2; i < i3; i++)
+			_tod(det,i) -= dcumj;
+	}
+}
+
+// Blas extensions
+
+typedef pb::array_t<float,0> farray;
+void sgemm(char transa, char transb, int M, int N, int K, float alpha, const farray & A, int LDA, const farray & B, int LDB, float beta, farray & C, int LDC) {
+	sgemm_(&transa, &transb, &M, &N, &K, &alpha, A.data(), &LDA, B.data(), &LDB, &beta, C.mutable_data(), &LDC);
+}
+
+
 // What do we need to make a sotodlib device?
 // 1. LocalMap
 //    Must contain .arr, a device array reshapable to (ntile,ncomp,tyshape,txshape)
@@ -405,5 +478,18 @@ PYBIND11_MODULE(compiled, m) {
 		pb::arg("tod"), pb::arg("data"), pb::arg("offs"), pb::arg("dets"), pb::arg("starts"), pb::arg("lens"));
 	m.def("insert_ranges_f64", &insert_ranges<double>, "Insert cuts",
 		pb::arg("tod"), pb::arg("data"), pb::arg("offs"), pb::arg("dets"), pb::arg("starts"), pb::arg("lens"));
+
+	// Deglitching
+	m.def("get_border_means_f32", &get_border_means<float>, "Get values at edges of cuts",
+		pb::arg("bvals"), pb::arg("tod"), pb::arg("index_map"));
+	m.def("get_border_means_f64", &get_border_means<double>, "Get values at edges of cuts",
+		pb::arg("bvals"), pb::arg("tod"), pb::arg("index_map"));
+	m.def("deglitch_f32", &deglitch<float>, "Deglitch and dejump",
+		pb::arg("tod"), pb::arg("bvals"), pb::arg("cumj"), pb::arg("index_map2"));
+	m.def("deglitch_f64", &deglitch<double>, "Deglitch and dejump",
+		pb::arg("tod"), pb::arg("bvals"), pb::arg("cumj"), pb::arg("index_map2"));
+
+	// blas, since scipy doesn't cooperate
+	m.def("sgemm", &sgemm, "sgemm", pb::arg("transa"), pb::arg("transb"), pb::arg("M"), pb::arg("N"), pb::arg("K"), pb::arg("alpha"), pb::arg("A"), pb::arg("LDA"), pb::arg("B"), pb::arg("LDB"), pb::arg("beta"), pb::arg("C"), pb::arg("LDC"));
 
 }

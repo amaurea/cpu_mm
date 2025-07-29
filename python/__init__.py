@@ -4,6 +4,8 @@ import numpy as np
 ncomp  = 3
 tshape = (64,64)
 
+sgemm = compiled.sgemm
+
 class LocalPixelization(compiled.LocalPixelization):
 	def __init__(self, nypix_global, nxpix_global, periodic_xcoord=True):
 		nycells   = (nypix_global+tshape[0]-1)//tshape[0]
@@ -98,6 +100,20 @@ def extract_ranges(tod, junk, offs, dets, starts, lens):
 def insert_ranges(tod, junk, offs, dets, starts, lens):
 	fun = cget("insert_ranges", tod.dtype)
 	fun(tod, junk.reshape(-1), offs, dets, starts, lens)
+
+def get_border_means(bvals, tod, index_map):
+	fun = cget("get_border_means", tod.dtype)
+	assert index_map.shape == (bvals.shape[0],5)
+	assert bvals.shape[1] == 2
+	fun(bvals, tod, index_map)
+
+def deglitch(tod, bvals, index_map2):
+	fun   = cget("deglitch", tod.dtype)
+	jumps = bvals[:,1]-bvals[:,0]
+	cumj  = np.cumsum(jumps)
+	assert index_map2.shape == (bvals.shape[0],4)
+	assert bvals.shape[1] == 2
+	fun(tod, bvals, cumj, index_map2)
 
 def fix_shape(arr, shape):
 	assert arr.flags["C_CONTIGUOUS"]
