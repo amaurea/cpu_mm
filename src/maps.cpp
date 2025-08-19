@@ -388,6 +388,42 @@ void sgemm(char transa, char transb, int M, int N, int K, float alpha, const far
 	sgemm_(&transa, &transb, &M, &N, &K, &alpha, A.data(), &LDA, B.data(), &LDB, &beta, C.mutable_data(), &LDC);
 }
 
+// Scaling
+template <typename T>
+void block_scale1(carray<T> & tod, const carray<T> & scales, int32_t bsize) {
+	auto _tod    = tod.template mutable_unchecked<2>();
+	auto _scales = scales.template unchecked<1>();
+	int32_t ndet = tod.shape(0);
+	int32_t nsamp= tod.shape(1);
+	int32_t nblock= scales.shape(0);
+	#pragma omp parallel for collapse(2)
+	for(int32_t di = 0; di < ndet;  di++)
+	for(int32_t si = 0; si < nsamp; si++) {
+		// this division is avoidable, but probably fine
+		int32_t bi = si / bsize;
+		// could handle last block separately, to avoid repeated if
+		if(bi >= nblock) bi = nblock-1;
+		_tod(di,si) *= _scales(bi);
+	}
+}
+
+template <typename T>
+void block_scale2(carray<T> & tod, const carray<T> & scales, int32_t bsize) {
+	auto _tod    = tod.template mutable_unchecked<2>();
+	auto _scales = scales.template unchecked<2>();
+	int32_t ndet = tod.shape(0);
+	int32_t nsamp= tod.shape(1);
+	int32_t nblock= scales.shape(1);
+	#pragma omp parallel for collapse(2)
+	for(int32_t di = 0; di < ndet;  di++)
+	for(int32_t si = 0; si < nsamp; si++) {
+		// this division is avoidable, but probably fine
+		int32_t bi = si / bsize;
+		// could handle last block separately, to avoid repeated if
+		if(bi >= nblock) bi = nblock-1;
+		_tod(di,si) *= _scales(di,bi);
+	}
+}
 
 // What do we need to make a sotodlib device?
 // 1. LocalMap
@@ -491,5 +527,11 @@ PYBIND11_MODULE(compiled, m) {
 
 	// blas, since scipy doesn't cooperate
 	m.def("sgemm", &sgemm, "sgemm", pb::arg("transa"), pb::arg("transb"), pb::arg("M"), pb::arg("N"), pb::arg("K"), pb::arg("alpha"), pb::arg("A"), pb::arg("LDA"), pb::arg("B"), pb::arg("LDB"), pb::arg("beta"), pb::arg("C"), pb::arg("LDC"));
+
+	// Scaling
+	m.def("block_scale1_f32", &block_scale1<float>,  "Scale blocks of samples in TOD. Same factor for all dets", pb::arg("tod"), pb::arg("scales"), pb::arg("bsize"));
+	m.def("block_scale1_f64", &block_scale1<double>, "Scale blocks of samples in TOD. Same factor for all dets", pb::arg("tod"), pb::arg("scales"), pb::arg("bsize"));
+	m.def("block_scale2_f32", &block_scale2<float>,  "Scale blocks of samples in TOD. Individual factors for dets", pb::arg("tod"), pb::arg("scales"), pb::arg("bsize"));
+	m.def("block_scale2_f64", &block_scale2<double>, "Scale blocks of samples in TOD. Individual factors for dets", pb::arg("tod"), pb::arg("scales"), pb::arg("bsize"));
 
 }

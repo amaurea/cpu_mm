@@ -121,8 +121,10 @@ def fix_shape(arr, shape):
 	else: return arr
 
 def cget(name, dtype):
-	if   dtype == np.float32: suffix = "_f32"
-	elif dtype == np.float64: suffix = "_f64"
+	if   dtype == np.float32:    suffix = "_f32"
+	elif dtype == np.float64:    suffix = "_f64"
+	elif dtype == np.complex64:  suffix = "_c64"
+	elif dtype == np.complex128: suffix = "_c128"
 	else: raise ValueError("Invalid dtype '%s'" % str(dtype))
 	return getattr(compiled, name + suffix)
 
@@ -152,3 +154,27 @@ def expand_map_if_necessary(lmap, plan):
 	# but this generality isn't realized in practice because I assume
 	# [ntile,ncomp,64,64] several other places
 	lmap.pixelization.update_cell_offsets()
+
+def block_scale(tod, scales, bsize, inplace=False):
+	if not inplace: tod = tod.copy()
+	# Make version of tod that's 1d or 2d and real
+	wtod = tod
+	if wtod.ndim == 1: wtod = wtod[None]
+	assert wtod.ndim == 2
+	assert np.isrealobj(bsize)
+	if np.iscomplexobj(wtod):
+		wtod  = wtod.view(real_dtype(wtod.dtype))
+		bsize = bsize*2
+	# Can now pass it onto C-code
+	if   scales.ndim == 1:
+		cget("block_scale1", wtod.dtype)(wtod, scales, bsize)
+	elif scales.ndim == 2:
+		assert scales.shape[0] == tod.shape[0]
+		cget("block_scale2", wtod.dtype)(wtod, scales, bsize)
+	else: raise ValueError("scales must be 1d or 2d")
+	return tod
+
+def real_dtype(dtype):
+	"""Return the closest real (non-complex) dtype for the given dtype"""
+	# A bit ugly, but actually quite fast
+	return np.zeros(1, dtype).real.dtype
