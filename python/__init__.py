@@ -7,10 +7,22 @@ tshape = (64,64)
 sgemm = compiled.sgemm
 
 class LocalPixelization(compiled.LocalPixelization):
-	def __init__(self, nypix_global, nxpix_global, periodic_xcoord=True):
+	def __init__(self, nypix_global, nxpix_global, cell_offsets=None,
+			ystride=tshape[1], polstride=tshape[0]*tshape[1], periodic_xcoord=True):
+		# ystride and polstride are provided for compatibility with the gpu_mm constructor,
+		# but aren't actually free to take on any other values than the defaults, neither
+		# here nor there
+		assert ystride == tshape[1]
+		assert polstride == tshape[0]*tshape[1]
 		nycells   = (nypix_global+tshape[0]-1)//tshape[0]
 		nxcells   = (nxpix_global+tshape[1]-1)//tshape[1]
-		cell_inds = np.full((nycells,nxcells),-1,dtype=np.int32)
+		if cell_offsets is None:
+			cell_inds = np.full((nycells,nxcells),-1,dtype=np.int32)
+		else:
+			# Our C++ side wants to work with cell indices, so convert to
+			# that. But we will still provide the cell_offsets_cpu member
+			# for compatibility
+			cell_inds = (np.array(cell_offsets)//(ncomp*tshape[0]*tshape[1])).astype(np.int32)
 		compiled.LocalPixelization.__init__(self, nypix_global, nxpix_global, cell_inds)
 		self.update_cell_offsets()
 	def update_cell_offsets(self):
