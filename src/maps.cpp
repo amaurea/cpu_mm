@@ -186,6 +186,10 @@ void tod2map(
 		int32_t gcell = plan.active[ai];
 		const auto & cell = plan.cells[gcell];
 		int32_t icell = _cinds(cell.ycell, cell.xcell);
+		// in gpu_mm, being out of bounds raises and exception by default.
+		// Here we ignore it instead, like gpu_mm does if the partial_pixelization
+		// flag is passed
+		if(icell < 0) continue;
 		T * cell_data = _map.mutable_data(icell,0,0,0);
 		for(const auto & range : cell.ranges) {
 			for(int32_t si = 0; si < range.nsamp; si++) {
@@ -263,6 +267,10 @@ void map2tod(
 			for(int32_t jy = 0; jy < 2; jy++)
 			for(int32_t jx = 0; jx < 2; jx++) {
 				int32_t icell = _cinds(py.icell[jy], px.icell[jx]);
+			// in gpu_mm, being out of bounds raises and exception by default.
+			// Here we ignore it instead, like gpu_mm does if the partial_pixelization
+			// flag is passed
+				if(icell < 0) continue;
 				const T * cell_data = _map.data(icell,0,0,0);
 				val += eval_tqu(cell_data, polstride, py.i[jy], px.i[jx], tr, qr, ur, py.d[jy]*px.d[jx]);
 			}
@@ -355,7 +363,7 @@ void get_border_means(carray<T> & bvals, const carray<T> & tod, const carray<int
 }
 
 template<typename T>
-void deglitch(carray<T> & tod, const carray<T> & bvals, const carray<T> & cumj, const carray<int32_t> index_map2) {
+void dejump(carray<T> & tod, const carray<T> & bvals, const carray<T> & cumj, const carray<int32_t> index_map2) {
 	auto _tod   = tod.template mutable_unchecked<2>();
 	auto _bvals = bvals.template unchecked<2>();
 	auto _cumj  = cumj.template unchecked<1>();
@@ -378,6 +386,27 @@ void deglitch(carray<T> & tod, const carray<T> & bvals, const carray<T> & cumj, 
 		// Offset postcut area
 		for(int32_t i = i2; i < i3; i++)
 			_tod(det,i) -= dcumj;
+	}
+}
+
+template<typename T>
+void gapfill(carray<T> & tod, const carray<T> & bvals, const carray<int32_t> index_map2) {
+	auto _tod   = tod.template mutable_unchecked<2>();
+	auto _bvals = bvals.template unchecked<2>();
+	auto _imap  = index_map2.template unchecked<2>();
+	int32_t nrange= bvals.shape(0);
+	// dynamic because the tod loops have variable length
+	#pragma omp parallel for schedule(dynamic)
+	for(int32_t ri = 0; ri < nrange; ri++) {
+		int32_t det = _imap(ri,0);
+		// int32_t r0  = _imap(ri,1); // not used
+		int32_t i1  = _imap(ri,2);
+		int32_t i2  = _imap(ri,3);
+		T b1 = _bvals(ri,0);
+		T b2 = _bvals(ri,1);
+		// Gapfill cut area
+		for(int32_t i = i1; i < i2; i++)
+			_tod(det,i) = b1 + (b2-b1)*(i-i1+1)/(i2-i1+1);
 	}
 }
 
@@ -520,10 +549,14 @@ PYBIND11_MODULE(compiled, m) {
 		pb::arg("bvals"), pb::arg("tod"), pb::arg("index_map"));
 	m.def("get_border_means_f64", &get_border_means<double>, "Get values at edges of cuts",
 		pb::arg("bvals"), pb::arg("tod"), pb::arg("index_map"));
-	m.def("deglitch_f32", &deglitch<float>, "Deglitch and dejump",
+	m.def("dejump_f32", &dejump<float>, "Deglitch and dejump",
 		pb::arg("tod"), pb::arg("bvals"), pb::arg("cumj"), pb::arg("index_map2"));
-	m.def("deglitch_f64", &deglitch<double>, "Deglitch and dejump",
+	m.def("dejump_f64", &dejump<double>, "Deglitch and dejump",
 		pb::arg("tod"), pb::arg("bvals"), pb::arg("cumj"), pb::arg("index_map2"));
+	m.def("gapfill_f32", &gapfill<float>, "Linear gapfilling",
+		pb::arg("tod"), pb::arg("bvals"), pb::arg("index_map2"));
+	m.def("gapfill_f64", &gapfill<double>, "Linear gapfilling",
+		pb::arg("tod"), pb::arg("bvals"), pb::arg("index_map2"));
 
 	// blas, since scipy doesn't cooperate
 	m.def("sgemm", &sgemm, "sgemm", pb::arg("transa"), pb::arg("transb"), pb::arg("M"), pb::arg("N"), pb::arg("K"), pb::arg("alpha"), pb::arg("A"), pb::arg("LDA"), pb::arg("B"), pb::arg("LDB"), pb::arg("beta"), pb::arg("C"), pb::arg("LDC"));

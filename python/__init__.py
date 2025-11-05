@@ -78,7 +78,7 @@ def PointingPlan(preplan, xpointing): return preplan.plan
 
 _dtype_msg = "tod, map, xpointing (and response) must have the same dtype, which must be float32 or float64"
 
-def tod2map(lmap, tod, xpointing, plan, response=None):
+def tod2map(lmap, tod, xpointing, plan, response=None, partial_pixelization=False):
 	if response is None:
 		response = np.full((2,len(tod)),1,tod.dtype)
 	assert tod.dtype == lmap.arr.dtype, _dtype_msg
@@ -91,7 +91,7 @@ def tod2map(lmap, tod, xpointing, plan, response=None):
 	fun = cget("tod2map", tod.dtype)
 	fun(lmap.arr, tod, xpointing, response, lmap.pixelization, plan)
 
-def map2tod(tod, lmap, xpointing, plan=None, response=None):
+def map2tod(tod, lmap, xpointing, plan=None, response=None, partial_pixelization=False):
 	if response is None:
 		response = np.full((2,len(tod)),1,tod.dtype)
 	assert tod.dtype == lmap.arr.dtype, _dtype_msg
@@ -119,13 +119,19 @@ def get_border_means(bvals, tod, index_map):
 	assert bvals.shape[1] == 2
 	fun(bvals, tod, index_map)
 
-def deglitch(tod, bvals, index_map2):
-	fun   = cget("deglitch", tod.dtype)
+def dejump(tod, bvals, index_map2):
+	fun   = cget("dejump", tod.dtype)
 	jumps = bvals[:,1]-bvals[:,0]
 	cumj  = np.cumsum(jumps)
 	assert index_map2.shape == (bvals.shape[0],4)
 	assert bvals.shape[1] == 2
 	fun(tod, bvals, cumj, index_map2)
+
+def gapfill(tod, bvals, index_map2):
+	fun   = cget("gapfill", tod.dtype)
+	assert index_map2.shape == (bvals.shape[0],4)
+	assert bvals.shape[1] == 2
+	fun(tod, bvals, index_map2)
 
 def fix_shape(arr, shape):
 	assert arr.flags["C_CONTIGUOUS"]
