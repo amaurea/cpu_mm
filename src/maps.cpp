@@ -6,6 +6,7 @@
 namespace pb = pybind11;
 
 extern "C" void sgemm_(const char * transa, const char * transb, const int * M, const int * N, const int * K, const float * alpha, const float * A, const int * LDA, const float * B, const int * LDB, const float * beta, float * C, const int * LCD);
+extern "C" void dgemm_(const char * transa, const char * transb, const int * M, const int * N, const int * K, const double * alpha, const double * A, const int * LDA, const double * B, const int * LDB, const double * beta, double * C, const int * LCD);
 
 // DynamicMap is python in gpu_mm, so can be that here too
 // LocalPixelization is hybrid in gpu_mm. Why? Maybe just so it can be sent as argument
@@ -326,6 +327,22 @@ void insert_ranges(carray<T> & tod, const carray<T> & data, const carray<int32_t
 	}
 }
 
+template<typename T>
+void addto_ranges(carray<T> & tod, const carray<T> & data, const carray<int32_t> & offs, const carray<int32_t> & dets, const carray<int32_t> & starts, const carray<int32_t> & lens) {
+	auto _tod    = tod.template mutable_unchecked<2>();
+	auto _data   = data.template unchecked<1>();
+	auto _offs   = offs.unchecked<1>();
+	auto _dets   = dets.unchecked<1>();
+	auto _starts = starts.unchecked<1>();
+	auto _lens   = lens.unchecked<1>();
+	#pragma omp parallel for
+	for(int i = 0; i < _dets.size(); i++) {
+		int off = _offs[i], det = _dets[i], start = _starts[i], len = _lens[i];
+		for(int si = 0; si < len; si++)
+			_tod(det, start+si) += _data[off+si];
+	}
+}
+
 // Deglitching
 
 template<typename T>
@@ -412,9 +429,13 @@ void gapfill(carray<T> & tod, const carray<T> & bvals, const carray<int32_t> ind
 
 // Blas extensions
 
-typedef pb::array_t<float,0> farray;
+typedef pb::array_t<float,0>  farray;
+typedef pb::array_t<double,0> darray;
 void sgemm(char transa, char transb, int M, int N, int K, float alpha, const farray & A, int LDA, const farray & B, int LDB, float beta, farray & C, int LDC) {
 	sgemm_(&transa, &transb, &M, &N, &K, &alpha, A.data(), &LDA, B.data(), &LDB, &beta, C.mutable_data(), &LDC);
+}
+void dgemm(char transa, char transb, int M, int N, int K, double alpha, const darray & A, int LDA, const darray & B, int LDB, double beta, darray & C, int LDC) {
+	dgemm_(&transa, &transb, &M, &N, &K, &alpha, A.data(), &LDA, B.data(), &LDB, &beta, C.mutable_data(), &LDC);
 }
 
 // Scaling
@@ -543,6 +564,10 @@ PYBIND11_MODULE(compiled, m) {
 		pb::arg("tod"), pb::arg("data"), pb::arg("offs"), pb::arg("dets"), pb::arg("starts"), pb::arg("lens"));
 	m.def("insert_ranges_f64", &insert_ranges<double>, "Insert cuts",
 		pb::arg("tod"), pb::arg("data"), pb::arg("offs"), pb::arg("dets"), pb::arg("starts"), pb::arg("lens"));
+	m.def("addto_ranges_f32", &addto_ranges<float>, "Insert cuts",
+		pb::arg("tod"), pb::arg("data"), pb::arg("offs"), pb::arg("dets"), pb::arg("starts"), pb::arg("lens"));
+	m.def("addto_ranges_f64", &addto_ranges<double>, "Insert cuts",
+		pb::arg("tod"), pb::arg("data"), pb::arg("offs"), pb::arg("dets"), pb::arg("starts"), pb::arg("lens"));
 
 	// Deglitching
 	m.def("get_border_means_f32", &get_border_means<float>, "Get values at edges of cuts",
@@ -560,6 +585,7 @@ PYBIND11_MODULE(compiled, m) {
 
 	// blas, since scipy doesn't cooperate
 	m.def("sgemm", &sgemm, "sgemm", pb::arg("transa"), pb::arg("transb"), pb::arg("M"), pb::arg("N"), pb::arg("K"), pb::arg("alpha"), pb::arg("A"), pb::arg("LDA"), pb::arg("B"), pb::arg("LDB"), pb::arg("beta"), pb::arg("C"), pb::arg("LDC"));
+	m.def("dgemm", &dgemm, "dgemm", pb::arg("transa"), pb::arg("transb"), pb::arg("M"), pb::arg("N"), pb::arg("K"), pb::arg("alpha"), pb::arg("A"), pb::arg("LDA"), pb::arg("B"), pb::arg("LDB"), pb::arg("beta"), pb::arg("C"), pb::arg("LDC"));
 
 	// Scaling
 	m.def("block_scale1_f32", &block_scale1<float>,  "Scale blocks of samples in TOD. Same factor for all dets", pb::arg("tod"), pb::arg("scales"), pb::arg("bsize"));

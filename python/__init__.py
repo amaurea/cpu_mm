@@ -5,6 +5,7 @@ ncomp  = 3
 tshape = (64,64)
 
 sgemm = compiled.sgemm
+dgemm = compiled.dgemm
 
 class LocalPixelization(compiled.LocalPixelization):
 	def __init__(self, nypix_global, nxpix_global, cell_offsets=None,
@@ -70,12 +71,6 @@ class PointingPrePlan:
 # but we still do it this way for compatibility
 def PointingPlan(preplan, xpointing): return preplan.plan
 
-
-# TODO: I've decided that tod should always be 2d,
-# map always 4d, when sogma uses them in the device
-# interface. This will require some changes with how
-# it's used with gpu_mm
-
 _dtype_msg = "tod, map, xpointing (and response) must have the same dtype, which must be float32 or float64"
 
 def tod2map(lmap, tod, xpointing, plan, response=None, partial_pixelization=False):
@@ -109,8 +104,9 @@ def extract_ranges(tod, junk, offs, dets, starts, lens):
 	fun = cget("extract_ranges", tod.dtype)
 	fun(tod, junk.reshape(-1), offs, dets, starts, lens)
 
-def insert_ranges(tod, junk, offs, dets, starts, lens):
-	fun = cget("insert_ranges", tod.dtype)
+def insert_ranges(tod, junk, offs, dets, starts, lens, add=False):
+	if add: fun = cget("addto_ranges",  tod.dtype)
+	else:   fun = cget("insert_ranges", tod.dtype)
 	fun(tod, junk.reshape(-1), offs, dets, starts, lens)
 
 def get_border_means(bvals, tod, index_map):
