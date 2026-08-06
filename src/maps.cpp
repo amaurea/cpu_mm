@@ -145,10 +145,10 @@ void build_pointing_plan(
 	LocalPixelization &lp,
 	PointingPlan & plan) {
 
-	int32_t     ndet  = xpointing.shape(1);
+	int32_t ndet  = xpointing.shape(1);
 	int32_t nsamp = xpointing.shape(2);
 	auto    _pt   = xpointing.template unchecked<3>();
-	int32_t     nxcell= plan.nxcell;
+	int32_t nxcell= plan.nxcell;
 
 	for(int32_t det = 0; det < ndet; det++) {
 		for(int32_t samp = 0; samp < nsamp; samp++) {
@@ -233,7 +233,8 @@ void map2tod(
 	carray<T> &tod,             // (ndet,nt)
 	const carray<T> &xpointing, // ({y,x,alpha},ndet,nt)
 	const carray<T> &response,  // ({T,P},ndet)
-	const LocalPixelization &lp) {
+	const LocalPixelization &lp,
+	bool accum) {
 
 	// Like gpu_mm, we're assuming a contiguous block of memory.
 	// This should be ensured by the carray type
@@ -275,7 +276,56 @@ void map2tod(
 				const T * cell_data = _map.data(icell,0,0,0);
 				val += eval_tqu(cell_data, polstride, py.i[jy], px.i[jx], tr, qr, ur, py.d[jy]*px.d[jx]);
 			}
-			_tod(det,samp) = val;
+			if(accum) _tod(det,samp) += val;
+			else      _tod(det,samp)  = val;
+		}
+	}
+}
+
+// Pickup
+template<typename T>
+void tod2pickup(
+	carray<T> &pickup,     // (ndet,nx)
+	const carray<T> &tod,  // (ndet,nt)
+	const carray<T> &xs) { // (nt). Assumed to be in range [0,nx-1) (yes, exclusive end)
+
+	auto _pickup = pickup.template mutable_unchecked<2>();
+	auto _tod    = tod.template unchecked<2>();
+	auto _xs     = xs.template unchecked<1>();
+	int32_t ndet = tod.shape(0);
+	int32_t nsamp= tod.shape(1);
+
+	#pragma omp parallel for
+	for(int32_t det = 0; det < ndet; det++) {
+		for(int32_t samp = 0; samp < nsamp; samp++) {
+			T x  = _xs(samp);
+			int32_t ix = int32_t(x);
+			T rx = x-ix;
+			_pickup(det,ix)   += _tod(det,samp)*(1-rx);
+			_pickup(det,ix+1) += _tod(det,samp)*rx;
+		}
+	}
+}
+
+template<typename T>
+void pickup2tod(
+	const carray<T> &pickup, // (ndet,nx)
+	carray<T> &tod,          // (ndet,nt)
+	const carray<T> &xs) {   // (nt). Assumed to be in range [0,nx-1) (yes, exclusive end)
+
+	auto _pickup = pickup.template unchecked<2>();
+	auto _tod    = tod.template mutable_unchecked<2>();
+	auto _xs     = xs.template unchecked<1>();
+	int32_t ndet = tod.shape(0);
+	int32_t nsamp= tod.shape(1);
+
+	#pragma omp parallel for
+	for(int32_t det = 0; det < ndet; det++) {
+		for(int32_t samp = 0; samp < nsamp; samp++) {
+			T x  = _xs(samp);
+			int32_t ix = int32_t(x);
+			T rx = x-ix;
+			_tod(det,samp) += _pickup(det,ix)*(1-rx) + _pickup(det,ix+1)*rx;
 		}
 	}
 }
@@ -546,10 +596,21 @@ PYBIND11_MODULE(compiled, m) {
 
 	m.def("map2tod_f32", &map2tod<float>, "Project map into tod",
 		pb::arg("map"), pb::arg("tod"), pb::arg("xpointing"),
-		pb::arg("response"), pb::arg("lp"));
+		pb::arg("response"), pb::arg("lp"), pb::arg("accum"));
 	m.def("map2tod_f64", &map2tod<double>, "Project map into tod",
 		pb::arg("map"), pb::arg("tod"), pb::arg("xpointing"),
-		pb::arg("response"), pb::arg("lp"));
+		pb::arg("response"), pb::arg("lp"), pb::arg("accum"));
+
+	// Pickup
+	m.def("tod2pickup_f32", &tod2pickup<float>, "Accumulate tod into pickup",
+		pb::arg("pickup"), pb::arg("tod"), pb::arg("x"));
+	m.def("tod2pickup_f64", &tod2pickup<double>, "Accumulate tod into pickup",
+		pb::arg("pickup"), pb::arg("tod"), pb::arg("x"));
+
+	m.def("pickup2tod_f32", &pickup2tod<float>, "Accumulate tod into pickup",
+		pb::arg("pickup"), pb::arg("tod"), pb::arg("x"));
+	m.def("pickup2tod_f64", &pickup2tod<double>, "Accumulate tod into pickup",
+		pb::arg("pickup"), pb::arg("tod"), pb::arg("x"));
 
 	// Cuts
 	m.def("clear_ranges_f32", &clear_ranges<float>, "Clear cuts",

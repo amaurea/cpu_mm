@@ -86,7 +86,7 @@ def tod2map(lmap, tod, xpointing, plan, response=None, partial_pixelization=Fals
 	fun = cget("tod2map", tod.dtype)
 	fun(lmap.arr, tod, xpointing, response, lmap.pixelization, plan)
 
-def map2tod(tod, lmap, xpointing, plan=None, response=None, partial_pixelization=False):
+def map2tod(tod, lmap, xpointing, plan=None, response=None, partial_pixelization=False, accum=False):
 	if response is None:
 		response = np.full((2,len(tod)),1,tod.dtype)
 	assert tod.dtype == lmap.arr.dtype, _dtype_msg
@@ -94,7 +94,19 @@ def map2tod(tod, lmap, xpointing, plan=None, response=None, partial_pixelization
 	assert tod.dtype == response.dtype, _dtype_msg
 	assert tod.dtype in [np.float32, np.float64], _dtype_msg
 	fun = cget("map2tod", tod.dtype)
-	fun(lmap.arr, tod, xpointing, response, lmap.pixelization)
+	fun(lmap.arr, tod, xpointing, response, lmap.pixelization, accum)
+
+def tod2pickup(pickup, tod, x):
+	assert pickup.dtype == tod.dtype, "tod, pickup and x must have the same dtype, which must be float32 or float64"
+	assert x.dtype      == tod.dtype, "tod, pickup and x must have the same dtype, which must be float32 or float64"
+	fun = cget("tod2pickup", tod.dtype)
+	fun(pickup, tod, x)
+
+def pickup2tod(pickup, tod, x):
+	assert pickup.dtype == tod.dtype, "tod, pickup and x must have the same dtype, which must be float32 or float64"
+	assert x.dtype      == tod.dtype, "tod, pickup and x must have the same dtype, which must be float32 or float64"
+	fun = cget("pickup2tod", tod.dtype)
+	fun(pickup, tod, x)
 
 def clear_ranges(tod, dets, starts, lens):
 	fun = cget("clear_ranges", tod.dtype)
