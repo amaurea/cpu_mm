@@ -97,14 +97,14 @@ def map2tod(tod, lmap, xpointing, plan=None, response=None, partial_pixelization
 	fun(lmap.arr, tod, xpointing, response, lmap.pixelization, accum)
 
 def tod2pickup(pickup, tod, x):
-	assert pickup.dtype == tod.dtype, "tod, pickup and x must have the same dtype, which must be float32 or float64"
-	assert x.dtype      == tod.dtype, "tod, pickup and x must have the same dtype, which must be float32 or float64"
+	assert pickup.dtype == tod.dtype, "pickup and tod must have the same dtype, which must be float32 or float64 but got %s and %s" % (pickup.dtype.name, tod.dtype.name)
+	assert x.dtype      == tod.dtype, "x and tod must have the same dtype, which must be float32 or float64 but got %s and %s" % (x.dtype.name, tod.dtype.name)
 	fun = cget("tod2pickup", tod.dtype)
 	fun(pickup, tod, x)
 
 def pickup2tod(pickup, tod, x):
-	assert pickup.dtype == tod.dtype, "tod, pickup and x must have the same dtype, which must be float32 or float64"
-	assert x.dtype      == tod.dtype, "tod, pickup and x must have the same dtype, which must be float32 or float64"
+	assert pickup.dtype == tod.dtype, "pickup and tod must have the same dtype, which must be float32 or float64 but got %s and %s" % (pickup.dtype.name, tod.dtype.name)
+	assert x.dtype      == tod.dtype, "x and tod must have the same dtype, which must be float32 or float64 but got %s and %s" % (x.dtype.name, tod.dtype.name)
 	fun = cget("pickup2tod", tod.dtype)
 	fun(pickup, tod, x)
 
