@@ -204,3 +204,23 @@ def real_dtype(dtype):
 	"""Return the closest real (non-complex) dtype for the given dtype"""
 	# A bit ugly, but actually quite fast
 	return np.zeros(1, dtype).real.dtype
+
+def pair_rot(tod, pairs, rots, bsize, inv=False):
+	assert tod.ndim == 2
+	assert pairs.ndim == 2
+	assert pairs.shape[1] == 2
+	assert rots.ndim == 3
+	assert rots.shape[0] == 2
+	assert tod.dtype == rots.dtype
+	nblock = tod.shape[1]//bsize
+	assert rots.shape[1] == nblock
+	cget("pair_rot", tod.dtype)(tod, pairs, rots[0], rots[1], bsize, inv)
+
+def pair_cov(tod, pairs, bsize):
+	assert tod.ndim == 2
+	assert pairs.ndim == 2
+	assert pairs.shape[1] == 2
+	nblock = tod.shape[1]//bsize
+	covs = np.zeros((len(pairs),nblock), tod.dtype)
+	cget("pair_cov", tod.dtype)(tod, pairs, covs, bsize)
+	return covs

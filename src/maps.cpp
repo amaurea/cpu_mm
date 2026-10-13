@@ -525,6 +525,85 @@ void block_scale2(carray<T> & tod, const carray<T> & scales, int32_t bsize) {
 	}
 }
 
+template <typename T>
+void pair_rot(carray<T> & tod, const carray_cast<int32_t> & pairs, const carray<T> & coss, const carray<T> & sins, int32_t bsize, bool inv) {
+	auto _tod  = tod.template mutable_unchecked<2>();
+	auto _coss = coss.template unchecked<2>();
+	auto _sins = sins.template unchecked<2>();
+	auto _pairs= pairs.template unchecked<2>();
+	int32_t npair = _pairs.shape(0);
+	int32_t nsamp = _tod.shape(1);
+	int32_t nblock = nsamp/bsize;
+	int32_t nwhole = nblock*bsize;
+	if(nblock < 1) nblock = 1;
+	#pragma omp parallel for collapse(2)
+	for(int32_t pi = 0; pi < npair; pi++) {
+		int32_t d1 =  _pairs(pi,0), d2 = _pairs(pi,1);
+		for(int32_t bi = 0; bi < nblock; bi++) {
+			T cos, sin;
+			if(inv) { cos = -_sins(bi,pi); sin = _coss(bi,pi); }
+			else    { cos =  _coss(bi,pi); sin = _sins(bi,pi); }
+			for(int32_t isub = 0; isub < bsize; isub++) {
+				int32_t samp = bi*bsize+isub;
+				T diff = cos*_tod(d1,samp) + sin*_tod(d2,samp);
+				T sum  =-sin*_tod(d1,samp) + cos*_tod(d2,samp);
+				_tod(d1,samp) = diff;
+				_tod(d2,samp) = sum;
+			}
+		}
+	}
+	for(int32_t pi = 0; pi < npair; pi++) {
+		int32_t d1 =  _pairs(pi,0), d2 = _pairs(pi,1);
+		// Handle extended last bin
+		T cos, sin;
+		int32_t bi = nblock-1;
+		if(inv) { cos = -_sins(bi,pi); sin = _coss(bi,pi); }
+		else    { cos =  _coss(bi,pi); sin = _sins(bi,pi); }
+		for(int32_t samp = nwhole; samp < nsamp; samp++) {
+			T diff = cos*_tod(d1,samp) + sin*_tod(d2,samp);
+			T sum  =-sin*_tod(d1,samp) + cos*_tod(d2,samp);
+			_tod(d1,samp) = diff;
+			_tod(d2,samp) = sum;
+		}
+	}
+}
+
+template <typename T>
+void pair_cov(const carray<T> & tod, const carray_cast<int32_t> & pairs, carray<T> & covs, int32_t bsize) {
+	auto _tod  = tod.template unchecked<2>();
+	auto _covs = covs.template mutable_unchecked<2>();
+	auto _pairs= pairs.template unchecked<2>();
+	int32_t npair = _pairs.shape(0);
+	int32_t nsamp = _tod.shape(1);
+	int32_t nblock = nsamp/bsize;
+	int32_t nwhole = nblock*bsize;
+	if(nblock < 1) nblock = 1;
+	#pragma omp parallel for collapse(2)
+	for(int32_t pi = 0; pi < npair; pi++) {
+		int32_t d1 = _pairs(pi,0), d2 = _pairs(pi,1);
+		for(int32_t bi = 0; bi < nblock; bi++) {
+			T cov = 0;
+			for(int32_t isub = 0; isub < bsize; isub++) {
+				int32_t samp = bi*bsize+isub;
+				cov += _tod(d1,samp)*_tod(d2,samp);
+			}
+			_covs(pi,bi) = cov;
+		}
+	}
+	for(int32_t pi = 0; pi < npair; pi++) {
+		int32_t d1 = _pairs(pi,0), d2 = _pairs(pi,1);
+		// Handle extended last bin
+		for(int32_t samp = nwhole; samp < nsamp; samp++)
+			_covs(pi,nblock-1) += _tod(d1,samp)*_tod(d2,samp);
+	}
+	// And normalize
+	for(int32_t pi = 0; pi < npair; pi++) {
+		for(int32_t bi = 0; bi < nblock-1; bi++)
+			_covs(pi,bi) /= bsize;
+		_covs(pi,nblock-1) /= bsize + nsamp-nwhole;
+	}
+}
+
 // What do we need to make a sotodlib device?
 // 1. LocalMap
 //    Must contain .arr, a device array reshapable to (ntile,ncomp,tyshape,txshape)
@@ -654,4 +733,9 @@ PYBIND11_MODULE(compiled, m) {
 	m.def("block_scale2_f32", &block_scale2<float>,  "Scale blocks of samples in TOD. Individual factors for dets", pb::arg("tod"), pb::arg("scales"), pb::arg("bsize"));
 	m.def("block_scale2_f64", &block_scale2<double>, "Scale blocks of samples in TOD. Individual factors for dets", pb::arg("tod"), pb::arg("scales"), pb::arg("bsize"));
 
+	// Pair rotation
+	m.def("pair_rot_f32", &pair_rot<float>,  "Rotate pairs with block-wise coefficients", pb::arg("tod"), pb::arg("pairs"), pb::arg("coss"), pb::arg("sins"), pb::arg("bsize"), pb::arg("inv"));
+	m.def("pair_rot_f64", &pair_rot<double>, "Rotate pairs with block-wise coefficients", pb::arg("tod"), pb::arg("pairs"), pb::arg("coss"), pb::arg("sins"), pb::arg("bsize"), pb::arg("inv"));
+	m.def("pair_cov_f32", &pair_cov<float>,  "Rotate pairs with block-wise coefficients", pb::arg("tod"), pb::arg("pairs"), pb::arg("covs"), pb::arg("bsize"));
+	m.def("pair_cov_f64", &pair_cov<double>, "Rotate pairs with block-wise coefficients", pb::arg("tod"), pb::arg("pairs"), pb::arg("covs"), pb::arg("bsize"));
 }
