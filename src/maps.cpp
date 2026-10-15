@@ -525,6 +525,9 @@ void block_scale2(carray<T> & tod, const carray<T> & scales, int32_t bsize) {
 	}
 }
 
+// [d1] = [ c  s] [d1]
+// [d2]   [-s  c] [d2]
+
 template <typename T>
 void pair_rot(carray<T> & tod, const carray_cast<int32_t> & pairs, const carray<T> & coss, const carray<T> & sins, int32_t bsize, bool inv) {
 	auto _tod  = tod.template mutable_unchecked<2>();
@@ -540,9 +543,8 @@ void pair_rot(carray<T> & tod, const carray_cast<int32_t> & pairs, const carray<
 	for(int32_t pi = 0; pi < npair; pi++) {
 		int32_t d1 =  _pairs(pi,0), d2 = _pairs(pi,1);
 		for(int32_t bi = 0; bi < nblock; bi++) {
-			T cos, sin;
-			if(inv) { cos = -_sins(pi,bi); sin = _coss(pi,bi); }
-			else    { cos =  _coss(pi,bi); sin = _sins(pi,bi); }
+			T cos = _coss(pi,bi), sin = _sins(pi,bi);
+			if(inv) sin = -sin;
 			for(int32_t isub = 0; isub < bsize; isub++) {
 				int32_t samp = bi*bsize+isub;
 				T diff = cos*_tod(d1,samp) + sin*_tod(d2,samp);
@@ -555,10 +557,9 @@ void pair_rot(carray<T> & tod, const carray_cast<int32_t> & pairs, const carray<
 	for(int32_t pi = 0; pi < npair; pi++) {
 		int32_t d1 =  _pairs(pi,0), d2 = _pairs(pi,1);
 		// Handle extended last bin
-		T cos, sin;
 		int32_t bi = nblock-1;
-		if(inv) { cos = -_sins(pi,bi); sin = _coss(pi,bi); }
-		else    { cos =  _coss(pi,bi); sin = _sins(pi,bi); }
+		T cos = _coss(pi,bi), sin = _sins(pi,bi);
+		if(inv) sin = -sin;
 		for(int32_t samp = nwhole; samp < nsamp; samp++) {
 			T diff = cos*_tod(d1,samp) + sin*_tod(d2,samp);
 			T sum  =-sin*_tod(d1,samp) + cos*_tod(d2,samp);
