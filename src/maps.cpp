@@ -541,8 +541,8 @@ void pair_rot(carray<T> & tod, const carray_cast<int32_t> & pairs, const carray<
 		int32_t d1 =  _pairs(pi,0), d2 = _pairs(pi,1);
 		for(int32_t bi = 0; bi < nblock; bi++) {
 			T cos, sin;
-			if(inv) { cos = -_sins(bi,pi); sin = _coss(bi,pi); }
-			else    { cos =  _coss(bi,pi); sin = _sins(bi,pi); }
+			if(inv) { cos = -_sins(pi,bi); sin = _coss(pi,bi); }
+			else    { cos =  _coss(pi,bi); sin = _sins(pi,bi); }
 			for(int32_t isub = 0; isub < bsize; isub++) {
 				int32_t samp = bi*bsize+isub;
 				T diff = cos*_tod(d1,samp) + sin*_tod(d2,samp);
@@ -557,8 +557,8 @@ void pair_rot(carray<T> & tod, const carray_cast<int32_t> & pairs, const carray<
 		// Handle extended last bin
 		T cos, sin;
 		int32_t bi = nblock-1;
-		if(inv) { cos = -_sins(bi,pi); sin = _coss(bi,pi); }
-		else    { cos =  _coss(bi,pi); sin = _sins(bi,pi); }
+		if(inv) { cos = -_sins(pi,bi); sin = _coss(pi,bi); }
+		else    { cos =  _coss(pi,bi); sin = _sins(pi,bi); }
 		for(int32_t samp = nwhole; samp < nsamp; samp++) {
 			T diff = cos*_tod(d1,samp) + sin*_tod(d2,samp);
 			T sum  =-sin*_tod(d1,samp) + cos*_tod(d2,samp);

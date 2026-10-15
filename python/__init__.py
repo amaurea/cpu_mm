@@ -206,14 +206,12 @@ def real_dtype(dtype):
 	return np.zeros(1, dtype).real.dtype
 
 def pair_rot(tod, pairs, rots, bsize, inv=False):
-	assert tod.ndim == 2
-	assert pairs.ndim == 2
-	assert pairs.shape[1] == 2
-	assert rots.ndim == 3
-	assert rots.shape[0] == 2
-	assert tod.dtype == rots.dtype
+	if tod.ndim != 2: raise ValueError("tod must be (ndet,nsamp) but got %s" % str(tod.shape))
+	if pairs.ndim != 2 or pairs.shape[1] != 2: raise ValueError("pairs must be (npair=%d,2) but got %s" % (npair,str(pairs.shape)))
+	npair  = pairs.shape[0]
 	nblock = tod.shape[1]//bsize
-	assert rots.shape[1] == nblock
+	if rots.shape != (2,npair,nblock): raise ValueError("rots must be (2,npair=%d,nblock=%d) but got %s" % (npair,nblock,str(rots.shape)))
+	if tod.dtype != rots.dtype: raise ValueError("tod.dtype (%s) != rots.dtype (%s)" % (str(tod.dtype), str(rots.dtype)))
 	cget("pair_rot", tod.dtype)(tod, pairs, rots[0], rots[1], bsize, inv)
 
 def pair_cov(tod, pairs, bsize):
