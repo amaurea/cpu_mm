@@ -605,6 +605,39 @@ void pair_cov(const carray<T> & tod, const carray_cast<int32_t> & pairs, carray<
 	}
 }
 
+template<typename T>
+void eigh2(const carray<T> & as, const carray<T> & bs, const carray<T> & cs, carray<T> & E1s, carray<T> & E2s, carray<T> & Vxs, carray<T> & Vys) {
+	auto _as  = as.template unchecked<1>();
+	auto _bs  = bs.template unchecked<1>();
+	auto _cs  = cs.template unchecked<1>();
+	auto _E1s = E1s.template mutable_unchecked<1>();
+	auto _E2s = E2s.template mutable_unchecked<1>();
+	auto _Vxs = Vxs.template mutable_unchecked<1>();
+	auto _Vys = Vys.template mutable_unchecked<1>();
+	int64_t nsamp = _as.shape(0);
+	#pragma omp parallel for
+	for(int64_t i = 0; i < nsamp; i++) {
+		T a = _as[i], b = _bs[i], c = _cs[i];
+		// Avoid overflow
+		T e_norm = std::max(a, c);
+		a /= e_norm; b /= e_norm; c /= e_norm;
+		T trace = a + c;
+		T diff  = a - c;
+		T core  = sqrt(diff*diff+4*b*b);
+		T E1    = (trace-core)/2;
+		T E2    = (trace+core)/2;
+		T ae    = a-E1;
+		T x, y;
+		if(abs(ae) >= abs(b)) { x = -b/ae; y = 1; }
+		else                  { x = 1; y = -ae/b; }
+		T v_norm = sqrt(x*x+y*y);
+		_E1s[i] = E1*e_norm;
+		_E2s[i] = E2*e_norm;
+		_Vxs[i] = x/v_norm;
+		_Vys[i] = y/v_norm;
+	}
+}
+
 // What do we need to make a sotodlib device?
 // 1. LocalMap
 //    Must contain .arr, a device array reshapable to (ntile,ncomp,tyshape,txshape)
@@ -734,9 +767,11 @@ PYBIND11_MODULE(compiled, m) {
 	m.def("block_scale2_f32", &block_scale2<float>,  "Scale blocks of samples in TOD. Individual factors for dets", pb::arg("tod"), pb::arg("scales"), pb::arg("bsize"));
 	m.def("block_scale2_f64", &block_scale2<double>, "Scale blocks of samples in TOD. Individual factors for dets", pb::arg("tod"), pb::arg("scales"), pb::arg("bsize"));
 
-	// Pair rotation
+	// Misc
 	m.def("pair_rot_f32", &pair_rot<float>,  "Rotate pairs with block-wise coefficients", pb::arg("tod"), pb::arg("pairs"), pb::arg("coss"), pb::arg("sins"), pb::arg("bsize"), pb::arg("inv"));
 	m.def("pair_rot_f64", &pair_rot<double>, "Rotate pairs with block-wise coefficients", pb::arg("tod"), pb::arg("pairs"), pb::arg("coss"), pb::arg("sins"), pb::arg("bsize"), pb::arg("inv"));
 	m.def("pair_cov_f32", &pair_cov<float>,  "Rotate pairs with block-wise coefficients", pb::arg("tod"), pb::arg("pairs"), pb::arg("covs"), pb::arg("bsize"));
 	m.def("pair_cov_f64", &pair_cov<double>, "Rotate pairs with block-wise coefficients", pb::arg("tod"), pb::arg("pairs"), pb::arg("covs"), pb::arg("bsize"));
+	m.def("eigh2_f32", &eigh2<float>, "Efficient batched 2x2 eigenvalue decompositions", pb::arg("a"), pb::arg("b"), pb::arg("c"), pb::arg("E1"), pb::arg("E2"), pb::arg("Vx"), pb::arg("Vy"));
+	m.def("eigh2_f64", &eigh2<double>,"Efficient batched 2x2 eigenvalue decompositions", pb::arg("a"), pb::arg("b"), pb::arg("c"), pb::arg("E1"), pb::arg("E2"), pb::arg("Vx"), pb::arg("Vy"));
 }

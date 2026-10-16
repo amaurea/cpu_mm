@@ -209,7 +209,7 @@ def pair_rot(tod, pairs, rots, bsize, inv=False):
 	if tod.ndim != 2: raise ValueError("tod must be (ndet,nsamp) but got %s" % str(tod.shape))
 	if pairs.ndim != 2 or pairs.shape[1] != 2: raise ValueError("pairs must be (npair=%d,2) but got %s" % (npair,str(pairs.shape)))
 	npair  = pairs.shape[0]
-	nblock = tod.shape[1]//bsize
+	nblock = max(tod.shape[1]//bsize,1)
 	if rots.shape != (2,npair,nblock): raise ValueError("rots must be (2,npair=%d,nblock=%d) but got %s" % (npair,nblock,str(rots.shape)))
 	if tod.dtype != rots.dtype: raise ValueError("tod.dtype (%s) != rots.dtype (%s)" % (str(tod.dtype), str(rots.dtype)))
 	cget("pair_rot", tod.dtype)(tod, pairs, rots[0], rots[1], bsize, inv)
@@ -218,7 +218,17 @@ def pair_cov(tod, pairs, bsize):
 	assert tod.ndim == 2
 	assert pairs.ndim == 2
 	assert pairs.shape[1] == 2
-	nblock = tod.shape[1]//bsize
+	nblock = max(tod.shape[1]//bsize,1)
 	covs = np.zeros((len(pairs),nblock), tod.dtype)
 	cget("pair_cov", tod.dtype)(tod, pairs, covs, bsize)
 	return covs
+
+def eigh2(a, b, c, E=None, V1=None):
+	a, b, c = [np.asarray(v, order="C") for v in [a,b,c]]
+	if E  is None: E  = np.empty((2,)+a.shape, a.dtype)
+	if V1 is None: V1 = np.empty((2,)+a.shape, a.dtype)
+	if not E .flags["C_CONTIGUOUS"]: raise ValueError("E  is not contiguous")
+	if not V1.flags["C_CONTIGUOUS"]: raise ValueError("V1 is not contiguous")
+	fa, fb, fc, fe1, fe2, fvx, fvy = [v.reshape(-1) for v in [a,b,c,E[0],E[1],V1[0],V1[1]]]
+	cget("eigh2", a.dtype)(fa, fb, fc, fe1, fe2, fvx, fvy)
+	return E, V1
